@@ -5,6 +5,8 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -17,6 +19,9 @@ type Server struct {
 }
 
 func (s *Server) ListenAndServe() {
+	if s.Opts.RedirectHttpToHttps {
+		go s.ServeHTTPSRedirector()
+	}
 	if s.Opts.TLSKeyFile != "" || s.Opts.TLSCertFile != "" || s.Opts.LetsEncryptEnabled {
 		s.ServeHTTPS()
 	} else {
@@ -25,24 +30,19 @@ func (s *Server) ListenAndServe() {
 }
 
 func (s *Server) ServeHTTP() {
-	httpAddress := s.Opts.HttpAddress
-	scheme := ""
-
-	i := strings.Index(httpAddress, "://")
-	if i > -1 {
-		scheme = httpAddress[0:i]
+	u, err := url.Parse(s.Opts.HttpAddress)
+	if err != nil {
+		log.Fatalf("FATAL: could not parse %#v: %v", s.Opts.HttpAddress, err)
 	}
 
 	var networkType string
-	switch scheme {
+	switch u.Scheme {
 	case "", "http":
 		networkType = "tcp"
 	default:
-		networkType = scheme
+		networkType = u.Scheme
 	}
-
-	slice := strings.SplitN(httpAddress, "//", 2)
-	listenAddr := slice[len(slice)-1]
+	listenAddr := strings.TrimPrefix(u.String(), u.Scheme+"://")
 
 	listener, err := net.Listen(networkType, listenAddr)
 	if err != nil {
@@ -104,6 +104,12 @@ func (s *Server) ServeHTTPS() {
 	}
 
 	log.Printf("HTTPS: closing %s", tlsListener.Addr())
+}
+
+func (s *Server) ServeHTTPSRedirector() {
+	h := LoggingHandler(os.Stdout, NewRedirectHandler(*s.Opts), s.Opts.RequestLogging)
+	log.Printf("HTTPs redirector listening on: %s", s.Opts.HttpsRedirectorAddress)
+	log.Fatal(http.ListenAndServe(s.Opts.HttpsRedirectorAddress, h))
 }
 
 // tcpKeepAliveListener sets TCP keep-alive timeouts on accepted
